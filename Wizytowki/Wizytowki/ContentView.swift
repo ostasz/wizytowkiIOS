@@ -371,7 +371,48 @@ struct ContactEditForm: View {
             }
             
             Section(header: Text("Adres")) {
-                TextField("Pełny adres", text: Binding(get: { contact.address ?? "" }, set: { contact.address = $0 }))
+                TextField("Ulica", text: Binding(
+                    get: { contact.address?.street ?? "" },
+                    set: { newValue in
+                        if contact.address == nil {
+                            contact.address = PostalAddress()
+                        }
+                        contact.address?.street = newValue
+                    }
+                ))
+                
+                HStack {
+                    TextField("Kod", text: Binding(
+                        get: { contact.address?.postalCode ?? "" },
+                        set: { newValue in
+                            if contact.address == nil {
+                                contact.address = PostalAddress()
+                            }
+                            contact.address?.postalCode = newValue
+                        }
+                    ))
+                    .keyboardType(.numbersAndPunctuation)
+                    
+                    TextField("Miasto", text: Binding(
+                        get: { contact.address?.city ?? "" },
+                        set: { newValue in
+                            if contact.address == nil {
+                                contact.address = PostalAddress()
+                            }
+                            contact.address?.city = newValue
+                        }
+                    ))
+                }
+                
+                TextField("Kraj", text: Binding(
+                    get: { contact.address?.country ?? "" },
+                    set: { newValue in
+                        if contact.address == nil {
+                            contact.address = PostalAddress()
+                        }
+                        contact.address?.country = newValue
+                    }
+                ))
             }
             
             Section(header: Text("Kontakt")) {

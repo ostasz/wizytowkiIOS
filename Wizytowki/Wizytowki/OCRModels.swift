@@ -3,6 +3,21 @@ import Vision
 import UIKit
 import Combine
 
+// Postal Address structure
+struct PostalAddress: Equatable, Codable {
+    var street: String?
+    var postalCode: String?
+    var city: String?
+    var country: String?
+    
+    init(street: String? = nil, postalCode: String? = nil, city: String? = nil, country: String? = nil) {
+        self.street = street
+        self.postalCode = postalCode
+        self.city = city
+        self.country = country
+    }
+}
+
 // Make it Codable so we can parse JSON from Gemini directly
 struct ParsedContact: Identifiable, Equatable, Codable {
     var id = UUID()
@@ -15,7 +30,7 @@ struct ParsedContact: Identifiable, Equatable, Codable {
     var phoneNumbers: [String] = []
     var emailAddresses: [String] = []
     var websites: [String] = []
-    var address: String?
+    var address: PostalAddress?
     var note: String = "" // New field for AI Enrichment
     
     // Keys match the new Vercel API response schema exactly
@@ -40,7 +55,7 @@ struct ParsedContact: Identifiable, Equatable, Codable {
         lastName = try? container.decode(String.self, forKey: .lastName)
         organization = try? container.decode(String.self, forKey: .organization)
         jobTitle = try? container.decode(String.self, forKey: .jobTitle)
-        address = try? container.decode(String.self, forKey: .address)
+        address = try? container.decode(PostalAddress.self, forKey: .address)
         note = (try? container.decode(String.self, forKey: .note)) ?? ""
         
         // Backend now always sends arrays, but let's be safe

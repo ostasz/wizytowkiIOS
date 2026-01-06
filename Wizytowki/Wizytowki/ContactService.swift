@@ -101,13 +101,21 @@ class ContactService {
                 mutableContact.urlAddresses = currentUrls
                 
                 // Address (Append new one if exists)
-                if let addressString = parsed.address, !addressString.isEmpty {
-                    // Check if address already exists to avoid duplication
-                    let exists = mutableContact.postalAddresses.contains { $0.value.street.contains(addressString) }
-                    if !exists {
-                        let postalAddress = CNMutablePostalAddress()
-                        postalAddress.street = addressString
-                        mutableContact.postalAddresses.append(CNLabeledValue(label: CNLabelWork, value: postalAddress))
+                if let address = parsed.address {
+                    // Build address string for duplicate check
+                    let addressComponents = [address.street, address.postalCode, address.city].compactMap { $0 }.filter { !$0.isEmpty }
+                    if !addressComponents.isEmpty {
+                        let addressString = addressComponents.joined(separator: " ")
+                        // Check if address already exists to avoid duplication
+                        let exists = mutableContact.postalAddresses.contains { $0.value.street.contains(addressString) }
+                        if !exists {
+                            let postalAddress = CNMutablePostalAddress()
+                            postalAddress.street = address.street ?? ""
+                            postalAddress.postalCode = address.postalCode ?? ""
+                            postalAddress.city = address.city ?? ""
+                            postalAddress.country = address.country ?? ""
+                            mutableContact.postalAddresses.append(CNLabeledValue(label: CNLabelWork, value: postalAddress))
+                        }
                     }
                 }
                 
@@ -157,10 +165,16 @@ class ContactService {
             CNLabeledValue(label: CNLabelURLAddressHomePage, value: $0 as NSString)
         }
         
-        if let addressString = parsed.address, !addressString.isEmpty {
-            let postalAddress = CNMutablePostalAddress()
-            postalAddress.street = addressString
-            contact.postalAddresses = [CNLabeledValue(label: CNLabelWork, value: postalAddress)]
+        if let address = parsed.address {
+            let addressComponents = [address.street, address.postalCode, address.city].compactMap { $0 }.filter { !$0.isEmpty }
+            if !addressComponents.isEmpty {
+                let postalAddress = CNMutablePostalAddress()
+                postalAddress.street = address.street ?? ""
+                postalAddress.postalCode = address.postalCode ?? ""
+                postalAddress.city = address.city ?? ""
+                postalAddress.country = address.country ?? ""
+                contact.postalAddresses = [CNLabeledValue(label: CNLabelWork, value: postalAddress)]
+            }
         }
         
         // Add Note
