@@ -1,0 +1,69 @@
+
+import { NextRequest, NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+export async function POST(req: NextRequest) {
+  try {
+    // 1. Basic Abuse Protection (Check Header)
+    // The iOS app MUST send this header.
+    const appSecret = req.headers.get('x-app-version');
+    if (appSecret !== '1.0') {
+      return NextResponse.json({ error: 'Unauthorized Client' }, { status: 403 });
+    }
+
+    // 2. Parse Body
+    const { text } = await req.json();
+
+    if (!text) {
+      return NextResponse.json({ error: 'Missing text parameter' }, { status: 400 });
+    }
+
+    // 3. Call Gemini
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    const prompt = `
+    Jesteś ekspertem OCR i asystentem wprowadzania danych. 
+    Twoim zadaniem jest przeanalizowanie surowego tekstu z wizytówki lub stopki mailowej.
+    Priorytet: Zachowanie polskich znaków.
+
+    Dane wejściowe:
+    """
+    ${text}
+    """
+
+    Zasady:
+    1. Popraw oczywiste błędy OCR (np. "Emall" -> "Email").
+    2. Formatuj numery telefonów do standardu (+48 XXX XXX XXX).
+    3. Rozdziel Imię od Nazwiska.
+    4. Ignoruj NIP/REGON przy szukaniu nazwy firmy (chyba że to jedyna nazwa).
+    5. BARDZO WAŻNE: Napraw brakujące polskie znaki diakrytyczne (np. "Wieclawska" -> "Więcławska", "Lódz" -> "Łódź").
+
+    Zwróć czysty JSON (bez markdown):
+    {
+        "firstName": string | null,
+        "lastName": string | null,
+        "organization": string | null,
+        "jobTitle": string | null,
+        "emailAddresses": string[],
+        "phoneNumbers": string[],
+        "websites": string[],
+        "address": string | null,
+        "note": string (tu wpisz puste, uzupełnimy później)
+    }
+    `;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const jsonString = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
+
+    // 4. Return Result
+    return NextResponse.json(JSON.parse(jsonString));
+
+  } catch (error: any) {
+    console.error("API Error:", error);
+    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+  }
+}
