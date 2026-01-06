@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Call Gemini
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // Switched back to 2.0-flash-exp as 1.5-flash returned 404 for this API key context
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
     const prompt = `
     Jesteś ekspertem OCR i asystentem wprowadzania danych. 
