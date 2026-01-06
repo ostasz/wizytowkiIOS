@@ -86,8 +86,17 @@ export async function POST(req: NextRequest) {
     3. Rozdziel Imię od Nazwiska.
     4. Ignoruj NIP/REGON przy szukaniu nazwy firmy (chyba że to jedyna nazwa).
     5. BARDZO WAŻNE: Napraw brakujące polskie znaki diakrytyczne (np. "Wieclawska" -> "Więcławska", "Lódz" -> "Łódź").
+    
+    CRITICAL - Adres pocztowy:
+    - NIGDY nie zwracaj adresu jako pojedynczego stringa!
+    - ZAWSZE rozdziel adres na 4 osobne pola: street, postalCode, city, country
+    - Jeśli adres to np. "29-100 Włoszczowa, ul. Jędrzejowska 79c", to:
+      * street: "ul. Jędrzejowska 79c"
+      * postalCode: "29-100"
+      * city: "Włoszczowa"
+      * country: "Polska"
 
-    Zwróć czysty JSON (bez markdown):
+    Zwróć DOKŁADNIE ten format JSON (bez markdown, bez komentarzy):
     {
         "firstName": string | null,
         "lastName": string | null,
@@ -96,8 +105,13 @@ export async function POST(req: NextRequest) {
         "emailAddresses": string[],
         "phoneNumbers": string[],
         "websites": string[],
-        "address": string | null,
-        "note": string (tu wpisz puste, uzupełnimy później)
+        "address": {
+            "street": string | null,
+            "postalCode": string | null,
+            "city": string | null,
+            "country": string | null
+        },
+        "note": ""
     }
     `;
 
@@ -107,6 +121,58 @@ export async function POST(req: NextRequest) {
 
     // Parse and return result
     const parsedData = JSON.parse(jsonString);
+
+    // POST-PROCESSING: Convert old address format (string) to new format (object)
+    if (parsedData.address && typeof parsedData.address === 'string') {
+      const addressString = parsedData.address as string;
+      console.log('🔍 Original address from Gemini:', addressString);
+
+      // Parse address string: "29-100 Włoszczowa, ul. Jędrzejowska 79c"
+      // Pattern: [postal code] [city], [street]
+      const match = addressString.match(/^(\d{2}-\d{3})\s+([^,]+),\s*(.+)$/);
+
+      if (match) {
+        parsedData.address = {
+          street: match[3].trim(),
+          postalCode: match[1].trim(),
+          city: match[2].trim(),
+          country: "Polska"
+        };
+        console.log('✅ Converted address (pattern 1):', parsedData.address);
+      } else {
+        // Fallback: try alternative pattern [street], [postal code] [city]
+        const altMatch = addressString.match(/^(.+?),\s*(\d{2}-\d{3})\s+(.+)$/);
+        if (altMatch) {
+          parsedData.address = {
+            street: altMatch[1].trim(),
+            postalCode: altMatch[2].trim(),
+            city: altMatch[3].trim(),
+            country: "Polska"
+          };
+          console.log('✅ Converted address (pattern 2):', parsedData.address);
+        } else {
+          // Last resort: put everything in street
+          parsedData.address = {
+            street: addressString,
+            postalCode: null,
+            city: null,
+            country: "Polska"
+          };
+          console.log('⚠️ Converted address (fallback):', parsedData.address);
+        }
+      }
+    } else if (!parsedData.address) {
+      // Ensure address is always an object
+      parsedData.address = {
+        street: null,
+        postalCode: null,
+        city: null,
+        country: null
+      };
+      console.log('ℹ️ No address found, using empty object');
+    } else {
+      console.log('✅ Address already in correct format:', parsedData.address);
+    }
 
     // 6. Add security headers (no-store for PII)
     return NextResponse.json(parsedData, {
