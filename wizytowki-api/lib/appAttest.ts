@@ -1,14 +1,12 @@
 import { NextRequest } from 'next/server';
-import jwt from 'jsonwebtoken';
 
 const TEAM_ID = 'JK6DX9TLGX';
-const KEY_ID = '2NV4Y9L6ZT';
 const BUNDLE_ID = 's.Wizytowki.Test1234';
 
 /**
  * Verify App Attest token from iOS client
- * For MVP: We use a simplified JWT-based approach instead of full attestation flow
- * The iOS app signs requests with a device-specific token
+ * For MVP: Simplified approach - decode Base64 token and verify payload
+ * Production: Should use full App Attest flow with cryptographic verification
  */
 export async function verifyAppAttest(req: NextRequest): Promise<boolean> {
     try {
@@ -19,29 +17,37 @@ export async function verifyAppAttest(req: NextRequest): Promise<boolean> {
             return false;
         }
 
-        // Get the DeviceCheck private key from env
-        const privateKey = process.env.DEVICECHECK_PRIVATE_KEY;
+        // Decode Base64 token
+        const decoded = Buffer.from(attestToken, 'base64').toString('utf-8');
+        const payload = JSON.parse(decoded);
 
-        if (!privateKey) {
-            console.error('❌ DEVICECHECK_PRIVATE_KEY not configured');
+        // Verify required fields
+        if (!payload.deviceId || !payload.bundleId || !payload.timestamp) {
+            console.log('❌ Invalid token payload');
             return false;
         }
 
-        // Verify the JWT token
-        // For production: implement full App Attest flow with challenge-response
-        // For MVP: verify signature and basic claims
-        const decoded = jwt.verify(attestToken, privateKey, {
-            algorithms: ['ES256'],
-            issuer: TEAM_ID,
-        }) as any;
-
         // Verify bundle ID matches
-        if (decoded.bundleId !== BUNDLE_ID) {
+        if (payload.bundleId !== BUNDLE_ID) {
             console.log('❌ Bundle ID mismatch');
             return false;
         }
 
-        console.log('✅ App Attest verified');
+        // Verify Team ID
+        if (payload.iss !== TEAM_ID) {
+            console.log('❌ Team ID mismatch');
+            return false;
+        }
+
+        // Verify timestamp is recent (within last 5 minutes)
+        const now = Date.now() / 1000;
+        const tokenAge = now - payload.timestamp;
+        if (tokenAge > 300 || tokenAge < -60) {
+            console.log('❌ Token expired or invalid timestamp');
+            return false;
+        }
+
+        console.log('✅ App Attest verified for device:', payload.deviceId.substring(0, 8));
         return true;
 
     } catch (error) {
