@@ -18,10 +18,9 @@ struct ParsedContact: Identifiable, Equatable, Codable {
     var address: String?
     var note: String = "" // New field for AI Enrichment
     
-    // Custom keys to match Gemini JSON format if needed, 
-    // but we will instruct Gemini to use specific keys.
+    // Keys match the new Vercel API response schema exactly
     enum CodingKeys: String, CodingKey {
-        case firstName, lastName, organization = "company", jobTitle, email, phone, website, address
+        case firstName, lastName, organization, jobTitle, emailAddresses, phoneNumbers, websites, address, note
     }
     
     // Manual init for empty state
@@ -30,37 +29,24 @@ struct ParsedContact: Identifiable, Equatable, Codable {
         self.id = UUID()
     }
     
-    // Decoder to handle single string vs array issues from AI
+    // Decoder - simplified as backend guarantees arrays now
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         self.id = UUID()
-        self.rawText = "" // AI result usually doesn't return raw text field, we fill it later
+        self.rawText = ""
         
         firstName = try? container.decode(String.self, forKey: .firstName)
         lastName = try? container.decode(String.self, forKey: .lastName)
         organization = try? container.decode(String.self, forKey: .organization)
         jobTitle = try? container.decode(String.self, forKey: .jobTitle)
         address = try? container.decode(String.self, forKey: .address)
+        note = (try? container.decode(String.self, forKey: .note)) ?? ""
         
-        // AI might return single string or array, handle both
-        if let singlePhone = try? container.decode(String.self, forKey: .phone) {
-            phoneNumbers = [singlePhone]
-        } else if let arrayPhone = try? container.decode([String].self, forKey: .phone) {
-            phoneNumbers = arrayPhone
-        }
-        
-        if let singleEmail = try? container.decode(String.self, forKey: .email) {
-            emailAddresses = [singleEmail]
-        } else if let arrayEmail = try? container.decode([String].self, forKey: .email) {
-            emailAddresses = arrayEmail
-        }
-        
-        if let singleWeb = try? container.decode(String.self, forKey: .website) {
-            websites = [singleWeb]
-        } else if let arrayWeb = try? container.decode([String].self, forKey: .website) {
-            websites = arrayWeb
-        }
+        // Backend now always sends arrays, but let's be safe
+        phoneNumbers = (try? container.decode([String].self, forKey: .phoneNumbers)) ?? []
+        emailAddresses = (try? container.decode([String].self, forKey: .emailAddresses)) ?? []
+        websites = (try? container.decode([String].self, forKey: .websites)) ?? []
     }
     
     func encode(to encoder: Encoder) throws {

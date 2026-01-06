@@ -1,194 +1,118 @@
+
 import Foundation
 
 class GeminiService {
+    // SECURITY UPDATE:
+    // API Key has been removed. Logic moved to secure backend.
+    private let baseUrl = "https://wizytowki-ios.vercel.app/api"
+    private let appVersionSecret = "1.0" // Simple header protection
     
-    // 🔥 WAŻNE: Wklej tutaj swój klucz API z https://aistudio.google.com/app/apikey
-    private let apiKey = "AIzaSyDAg--vn2haZorViV7XJsQbmsvUdSp9OHY"
-    
-    // Endpoint changed to gemini-2.5-flash (User Requested)
-    private let urlString = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-    
-    // --- OCR PARSING ---
-    
-    func parseWithGemini(text: String) async throws -> ParsedContact {
-        
-        // 1. Prepare JSON Prompt
-        let prompt = """
-        Jesteś ekspertem OCR i asystentem wprowadzania danych.
-        Twoim zadaniem jest przeanalizowanie surowego tekstu z wizytówki i wyodrębnienie danych strukturalnych.
-        Priorytet: Polski.
-
-        Zasady:
-        1. Popraw oczywiste błędy OCR (np. "Emall" -> "Email").
-        2. Formatuj numery telefonów (+48 XXX XXX XXX).
-        3. Rozdziel Imię od Nazwiska.
-        4. Ignoruj NIP/REGON przy szukaniu nazwy firmy.
-        5. BARDZO WAŻNE: Napraw brakujące polskie znaki diakrytyczne (np. "Wieclawska" -> "Więcławska", "Lódz" -> "Łódź", "Sląski" -> "Śląski"). Jeśli imię lub nazwisko brzmi polsko, MUSISZ użyć poprawnej polskiej pisowni z ogonkami.
-
-        Oto tekst z wizytówki:
-        \"\"\"
-        \(text)
-        \"\"\"
-
-        Zwróć kompletny JSON (bez markdown, czysty tekst):
-        {
-            "firstName": string | null,
-            "lastName": string | null,
-            "company": string | null,
-            "jobTitle": string | null,
-            "email": string | null,
-            "phone": string | null, // lub array jeśli wiele
-            "website": string | null, // lub array jeśli wiele
-            "address": string | null
-        }
-        """
-        
-        // 2. Build Request Body
-        let jsonBody: [String: Any] = [
-            "contents": [
-                [
-                    "parts": [
-                        ["text": prompt]
-                    ]
-                ]
-            ],
-            "generationConfig": [
-                "response_mime_type": "application/json"
-            ]
-        ]
-        
-        guard let url = URL(string: "\(urlString)?key=\(apiKey)") else {
-            throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+    // MARK: - 1. Parse Image Text (OCR -> JSON)
+    func parseWithGemini(text: String, completion: @escaping (Result<ParsedContact, Error>) -> Void) {
+        guard let url = URL(string: "\(baseUrl)/parse") else {
+            completion(.failure(NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+            return
         }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: jsonBody)
+        // Security Header
+        request.addValue(appVersionSecret, forHTTPHeaderField: "x-app-version")
         
-        // 3. Perform Request (Async)
-        let (data, _) = try await URLSession.shared.data(for: request)
+        // Simple Body: { "text": "..." }
+        let body: [String: Any] = ["text": text]
         
-        // Parse Gemini Response Structure
-        guard let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = jsonResponse["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let textResponse = parts.first?["text"] as? String else {
-            throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid API Response"])
-        }
-            
-        // Clean up potential markdown ```json wrapping
-        let cleanJson = textResponse.replacingOccurrences(of: "```json", with: "")
-                                    .replacingOccurrences(of: "```", with: "")
-                                    .trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        guard let contactData = cleanJson.data(using: .utf8) else {
-             throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Data conversion error"])
-        }
-        
-        var contact = try JSONDecoder().decode(ParsedContact.self, from: contactData)
-        contact.rawText = text // Preserve original text
-        return contact
-    }
-    
-    // --- COMPANY ENRICHMENT (Web + AI) ---
-    
-    struct EnrichmentData: Codable {
-        let companySummary: String
-        let industry: String?
-        let hqOrLocation: String?
-    }
-    
-    func enrichCompany(name: String, website: String, rawOcr: String) async throws -> EnrichmentData {
-        // 1. Web Scraping (Live)
-        var pageText = ""
-        if !website.isEmpty, let url = URL(string: website.hasPrefix("http") ? website : "https://\(website)") {
-            print("Pobieranie strony: \(url.absoluteString)")
-            pageText = await fetchAndCleanPageContent(url: url)
-        }
-        
-        // 2. Prepare Prompt
-        let prompt = """
-        Zadanie: Jako analityk biznesowy, uzupełnij notatkę o firmie (B2B).
-        Działaj dokładnie jak w podanym przykładzie.
-        
-        Wejście:
-        - Firma: \(name)
-        - Website: \(website)
-        - OCR Wizytówki: \"\"\"\(rawOcr.prefix(2000))\"\"\"
-        - Treść strony WWW: \"\"\"\(pageText.prefix(10000))\"\"\"
-        
-        Zwróć CZYSTY JSON:
-        {
-          "companySummary": string,         // 3-6 krótkich, konkretnych zdań o działalności firmy po polsku.
-          "industry": string|null,          // np. "Fotowoltaika", "Logistyka"
-          "hqOrLocation": string|null       // Siedziba główna
-        }
-        """
-        
-        // 3. Request Body
-        let jsonBody: [String: Any] = [
-            "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": [
-                "response_mime_type": "application/json",
-                "temperature": 0.2
-            ]
-        ]
-        
-        guard let url = URL(string: "\(urlString)?key=\(apiKey)") else {
-            throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: jsonBody)
-        
-        // 4. Call API
-        let (data, _) = try await URLSession.shared.data(for: request)
-        
-        // 5. Parse Response
-        guard let jsonResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = jsonResponse["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let textResponse = parts.first?["text"] as? String else {
-            throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid Enrichment API Response"])
-        }
-        
-        let cleanJson = textResponse.replacingOccurrences(of: "```json", with: "")
-                                    .replacingOccurrences(of: "```", with: "")
-                                    .trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        guard let resultData = cleanJson.data(using: .utf8) else {
-             throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Data conversion error"])
-        }
-        
-        return try JSONDecoder().decode(EnrichmentData.self, from: resultData)
-    }
-    
-    // Helper: Fetch HTML and strip tags
-    private func fetchAndCleanPageContent(url: URL) async -> String {
         do {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 8 // Szybki timeout
-            // Udajemy przeglądarkę
-            request.addValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-            
-            let (data, _) = try await URLSession.shared.data(for: request)
-            if let htmlString = String(data: data, encoding: .utf8) {
-                // Prostym regexem usuwamy tagi HTML, style i skrypty
-                return htmlString
-                    .replacingOccurrences(of: "<script[^>]*>[\\s\\S]*?</script>", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "<style[^>]*>[\\s\\S]*?</style>", with: "", options: .regularExpression)
-                    .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-                    .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         } catch {
-            print("Web Scraping Error: \(error)")
+            completion(.failure(error))
+            return
         }
-        return ""
+        
+        print("🚀 Sending request to Secure API: \(baseUrl)/parse")
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NSError(domain: "GeminiService", code: -2, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                return
+            }
+            
+            // Debug: Print raw JSON
+            if let str = String(data: data, encoding: .utf8) {
+                print("📩 Received JSON: \(str)")
+            }
+            
+            do {
+                var parsedContact = try JSONDecoder().decode(ParsedContact.self, from: data)
+                // Inject Raw Text back into the object for downstream logic (like enrichment)
+                parsedContact.rawText = text
+                completion(.success(parsedContact))
+            } catch {
+                print("❌ JSON Parsing Error: \(error)")
+                completion(.failure(error))
+            }
+        }.resume()
     }
+    
+    // Async wrapper for Parse
+    func parseWithGemini(text: String) async throws -> ParsedContact {
+        return try await withCheckedThrowingContinuation { continuation in
+            parseWithGemini(text: text) { result in
+                switch result {
+                case .success(let contact):
+                    continuation.resume(returning: contact)
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    // MARK: - 2. Enrich Company Info (B2B)
+    func enrichCompany(name: String, website: String, rawOcr: String) async throws -> CompanyEnrichment {
+        guard let url = URL(string: "\(baseUrl)/enrich") else {
+            throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue(appVersionSecret, forHTTPHeaderField: "x-app-version")
+        
+        let body: [String: Any] = [
+            "organization": name,
+            "website": website,
+            "rawText": rawOcr
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        
+        print("🚀 Sending B2B Enrichment request...")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw NSError(domain: "GeminiService", code: -3, userInfo: [NSLocalizedDescriptionKey: "Server Error"])
+        }
+        
+        let result = try JSONDecoder().decode(CompanyEnrichment.self, from: data)
+        return result
+    }
+}
+
+// Public Enriched Model (Matches Backend Response)
+struct CompanyEnrichment: Codable {
+    let summary: String
+    let industry: String?
+    let location: String? 
+    
+    // Compatible properties for existing code
+    var companySummary: String { return summary }
+    var hqOrLocation: String? { return location }
 }
