@@ -1,29 +1,73 @@
-
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { z } from 'zod';
+import { verifyAppAttest } from '@/lib/appAttest';
+import { checkRateLimit } from '@/lib/ratelimit';
+
+// 5. Check GEMINI_API_KEY at startup
+if (!process.env.GEMINI_API_KEY) {
+  throw new Error("GEMINI_API_KEY environment variable is not configured");
+}
 
 // Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-import { verifyAppAttest } from '@/lib/appAttest';
+// 3. Input validation schema with size limit
+const ParseRequestSchema = z.object({
+  text: z.string().min(1, "Text cannot be empty").max(20000, "Text too long (max 20,000 characters)")
+});
 
 export async function POST(req: NextRequest) {
   try {
     // 1. Verify App Attest (Device Authentication)
-    const isValid = await verifyAppAttest(req);
-    if (!isValid) {
+    const attestResult = await verifyAppAttest(req);
+    if (!attestResult) {
       return NextResponse.json({ error: 'Unauthorized Device' }, { status: 403 });
     }
 
-    // 2. Parse Body
-    const { text } = await req.json();
-
-    if (!text) {
-      return NextResponse.json({ error: 'Missing text parameter' }, { status: 400 });
+    // Extract deviceId from attest token for rate limiting
+    const attestToken = req.headers.get('x-attest-token');
+    let deviceId = 'unknown';
+    try {
+      const decoded = Buffer.from(attestToken!, 'base64').toString('utf-8');
+      const payload = JSON.parse(decoded);
+      deviceId = payload.deviceId || 'unknown';
+    } catch (e) {
+      // Fallback to IP if deviceId extraction fails
     }
 
-    // 3. Call Gemini
-    // Switched back to 2.0-flash-exp as 1.5-flash returned 404 for this API key context
+    // 1. Rate Limiting (per device + per IP)
+    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown-ip';
+    const rateLimitKey = `parse:${deviceId}:${ip}`;
+
+    const rateLimitResult = await checkRateLimit(rateLimitKey);
+    if (!rateLimitResult.success) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': '60',
+            'X-RateLimit-Remaining': String(rateLimitResult.remaining || 0)
+          }
+        }
+      );
+    }
+
+    // 3. Validate request body
+    const body = await req.json();
+    const validationResult = ParseRequestSchema.safeParse(body);
+
+    if (!validationResult.success) {
+      return NextResponse.json(
+        { error: 'Invalid request', details: validationResult.error.errors },
+        { status: 400 }
+      );
+    }
+
+    const { text } = validationResult.data;
+
+    // Call Gemini
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
     const prompt = `
@@ -61,11 +105,25 @@ export async function POST(req: NextRequest) {
     const response = await result.response;
     const jsonString = response.text().replace(/```json/g, '').replace(/```/g, '').trim();
 
-    // 4. Return Result
-    return NextResponse.json(JSON.parse(jsonString));
+    // Parse and return result
+    const parsedData = JSON.parse(jsonString);
+
+    // 6. Add security headers (no-store for PII)
+    return NextResponse.json(parsedData, {
+      headers: {
+        'Cache-Control': 'no-store, private',
+        'X-Content-Type-Options': 'nosniff'
+      }
+    });
 
   } catch (error: any) {
-    console.error("API Error:", error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    // 4. Secure error handling - don't leak internals
+    console.error("Parse API Error:", error); // Log internally
+
+    // Return generic error to client
+    return NextResponse.json(
+      { error: 'Internal Server Error' },
+      { status: 500 }
+    );
   }
 }
