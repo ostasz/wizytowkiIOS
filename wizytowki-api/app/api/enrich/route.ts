@@ -4,6 +4,7 @@ import { z } from 'zod';
 import * as cheerio from 'cheerio';
 import { verifyAppAttest } from '@/lib/appAttest';
 import { checkRateLimit } from '@/lib/ratelimit';
+import { validateAndSanitizeURL, safeFetch } from '@/lib/ssrfProtection';
 
 // 5. Check GEMINI_API_KEY at startup
 if (!process.env.GEMINI_API_KEY) {
@@ -71,26 +72,22 @@ export async function POST(req: NextRequest) {
 
         let contextData = `Nazwa firmy: ${organization}\nTekst z wizytówki: ${rawText}`;
 
-        // 2. Scrape Website (if provided)
+        // 2. Scrape Website (if provided) - WITH SSRF PROTECTION
         if (website) {
-            try {
-                // Add protocol if missing
-                let url = website;
-                if (!url.startsWith('http')) url = `https://${url}`;
+            // CRITICAL: Validate URL to prevent SSRF attacks
+            const urlValidation = await validateAndSanitizeURL(website);
 
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+            if (!urlValidation.valid) {
+                console.warn(`🚨 SSRF attempt blocked: ${urlValidation.error} for URL: ${website}`);
+                contextData += `\n(Nie udało się pobrać treści ze strony WWW: nieprawidłowy adres)`;
+            } else {
+                const url = urlValidation.sanitized!;
 
-                const webRes = await fetch(url, {
-                    signal: controller.signal,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Compatible; WizytownikAI/1.0)'
-                    }
-                });
-                clearTimeout(timeoutId);
+                // Safe fetch with size limits and redirect blocking
+                const fetchResult = await safeFetch(url, 2 * 1024 * 1024); // 2MB max
 
-                if (webRes.ok) {
-                    const html = await webRes.text();
+                if (fetchResult.ok && fetchResult.text) {
+                    const html = fetchResult.text;
                     const $ = cheerio.load(html);
 
                     // Remove scripts, styles for cleaner text
@@ -102,10 +99,10 @@ export async function POST(req: NextRequest) {
                     const bodyText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 4000); // Limit to 4k chars
 
                     contextData += `\n\nDane ze strony WWW (${url}):\nOpis Meta: ${metaDesc}\nTreść strony: ${bodyText}`;
+                } else {
+                    console.log("Scraping failed:", fetchResult.error);
+                    contextData += `\n(Nie udało się pobrać treści ze strony WWW: ${website})`;
                 }
-            } catch (e) {
-                console.log("Scraping failed (ignoring):", e);
-                contextData += `\n(Nie udało się pobrać treści ze strony WWW: ${website})`;
             }
         }
 
