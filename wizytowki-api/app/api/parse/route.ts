@@ -5,13 +5,14 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
+import { verifyAppAttest } from '@/lib/appAttest';
+
 export async function POST(req: NextRequest) {
   try {
-    // 1. Basic Abuse Protection (Check Header)
-    // The iOS app MUST send this header.
-    const appSecret = req.headers.get('x-app-version');
-    if (appSecret !== '1.0') {
-      return NextResponse.json({ error: 'Unauthorized Client' }, { status: 403 });
+    // 1. Verify App Attest (Device Authentication)
+    const isValid = await verifyAppAttest(req);
+    if (!isValid) {
+      return NextResponse.json({ error: 'Unauthorized Device' }, { status: 403 });
     }
 
     // 2. Parse Body

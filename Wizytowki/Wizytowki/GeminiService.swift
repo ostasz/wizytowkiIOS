@@ -9,55 +9,60 @@ class GeminiService {
     
     // MARK: - 1. Parse Image Text (OCR -> JSON)
     func parseWithGemini(text: String, completion: @escaping (Result<ParsedContact, Error>) -> Void) {
-        guard let url = URL(string: "\(baseUrl)/parse") else {
-            completion(.failure(NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Security Header
-        request.addValue(appVersionSecret, forHTTPHeaderField: "x-app-version")
-        
-        // Simple Body: { "text": "..." }
-        let body: [String: Any] = ["text": text]
-        
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-        } catch {
-            completion(.failure(error))
-            return
-        }
-        
-        print("🚀 Sending request to Secure API: \(baseUrl)/parse")
-        
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let data = data else {
-                completion(.failure(NSError(domain: "GeminiService", code: -2, userInfo: [NSLocalizedDescriptionKey: "No data"])))
-                return
-            }
-            
-            // Debug: Print raw JSON
-            if let str = String(data: data, encoding: .utf8) {
-                print("📩 Received JSON: \(str)")
-            }
-            
+        Task {
             do {
-                var parsedContact = try JSONDecoder().decode(ParsedContact.self, from: data)
-                // Inject Raw Text back into the object for downstream logic (like enrichment)
-                parsedContact.rawText = text
-                completion(.success(parsedContact))
+                // Generate App Attest Token
+                let attestToken = try await AppAttestService.shared.generateAttestToken()
+                
+                guard let url = URL(string: "\(baseUrl)/parse") else {
+                    completion(.failure(NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+                    return
+                }
+                
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+                // App Attest Token
+                request.addValue(attestToken, forHTTPHeaderField: "x-attest-token")
+                
+                // Simple Body: { "text": "..." }
+                let body: [String: Any] = ["text": text]
+                
+                request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        
+                print("🚀 Sending request to Secure API: \(baseUrl)/parse")
+        
+                URLSession.shared.dataTask(with: request) { data, response, error in
+                    if let error = error {
+                        completion(.failure(error))
+                        return
+                    }
+            
+                    guard let data = data else {
+                        completion(.failure(NSError(domain: "GeminiService", code: -2, userInfo: [NSLocalizedDescriptionKey: "No data"])))
+                        return
+                    }
+            
+                    // Debug: Print raw JSON
+                    if let str = String(data: data, encoding: .utf8) {
+                        print("📩 Received JSON: \(str)")
+                    }
+            
+                    do {
+                        var parsedContact = try JSONDecoder().decode(ParsedContact.self, from: data)
+                        // Inject Raw Text back into the object for downstream logic (like enrichment)
+                        parsedContact.rawText = text
+                        completion(.success(parsedContact))
+                    } catch {
+                        print("❌ JSON Parsing Error: \(error)")
+                        completion(.failure(error))
+                    }
+                }.resume()
+                
             } catch {
-                print("❌ JSON Parsing Error: \(error)")
                 completion(.failure(error))
             }
-        }.resume()
+        }
     }
     
     // Async wrapper for Parse
@@ -76,6 +81,9 @@ class GeminiService {
     
     // MARK: - 2. Enrich Company Info (B2B)
     func enrichCompany(name: String, website: String, rawOcr: String) async throws -> CompanyEnrichment {
+        // Generate App Attest Token
+        let attestToken = try await AppAttestService.shared.generateAttestToken()
+        
         guard let url = URL(string: "\(baseUrl)/enrich") else {
             throw NSError(domain: "GeminiService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
         }
@@ -83,7 +91,7 @@ class GeminiService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue(appVersionSecret, forHTTPHeaderField: "x-app-version")
+        request.addValue(attestToken, forHTTPHeaderField: "x-attest-token")
         
         let body: [String: Any] = [
             "organization": name,

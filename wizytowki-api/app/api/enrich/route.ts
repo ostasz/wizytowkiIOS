@@ -3,14 +3,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as cheerio from 'cheerio';
 
+import { verifyAppAttest } from '@/lib/appAttest';
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 export async function POST(req: NextRequest) {
     try {
-        // 1. Basic Auth
-        const appSecret = req.headers.get('x-app-version');
-        if (appSecret !== '1.0') {
-            return NextResponse.json({ error: 'Unauthorized Client' }, { status: 403 });
+        // 1. Verify App Attest
+        const isValid = await verifyAppAttest(req);
+        if (!isValid) {
+            return NextResponse.json({ error: 'Unauthorized Device' }, { status: 403 });
         }
 
         const { organization, website, rawText } = await req.json();
